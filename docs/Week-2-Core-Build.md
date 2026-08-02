@@ -105,9 +105,16 @@ resolves to the same plan tier — the demo is reproducible without a real billi
 and swapping in a real CRM later is a one-function change.
 `lookup_open_ticket_load` is already backed by real data (`tickets.count_open_for_customer`).
 
-**Three-tier degradation.** The prototype must never return nothing:
+**Three-tier degradation.** Once generation starts, the prototype should not return nothing:
 1. agent with tools → 2. plain LLM call with the same context, no tools →
-3. deterministic templated reply. Every downgrade is recorded in `context_used.errors`.
+3. deterministic templated reply. Every downgrade is recorded in `context_used.errors` and
+rendered in the dashboard's *Context used → Context Errors* panel.
+
+Caveat found during Week-2 verification: all three tiers live inside `generate_draft`, but
+`SupportCopilot.__init__` raises when `GROQ_API_KEY` is absent, so a missing key produces a
+503 and a placeholder draft row rather than the tier-3 reply. The fallback chain only covers
+*generation* failures, not *construction* failures. Moving the key check into `generate_draft`
+is a Week-3 item.
 
 **Structured context, not a prose trace.**
 `context_used` (`version: 2`) separates `signals` (counts, KB source list — cheap to
@@ -142,6 +149,11 @@ inspect the context that produced them, edit and accept.
 
 **Knowledge base:** four banking policy documents under `knowledge_base/`
 (savings account rules, minimum balance & charges, KYC/account update, ATM withdrawal FAQ).
+Note that `chroma_kb.py` silently falls back to Chroma's `DefaultEmbeddingFunction` and a
+separate `support_kb` collection when `GOOGLE_API_KEY` is unset, so a successful ingest does
+not by itself prove the Gemini path. Each of the four files also fits inside a single 800-char
+chunk, so `rag_top_k = 4` currently returns the whole KB — chunking and top-k are not yet
+meaningfully exercised and need a larger corpus before they can be tuned.
 
 **Config:** all knobs in `.env` via `pydantic-settings` — model, temperature, chunk size
 (800) / overlap (120), `rag_top_k` (4), `mem0_top_k` (5), paths.
@@ -173,13 +185,22 @@ service was migrated to `langchain.agents.create_agent`, so the patch target no 
 and the tests error with `AttributeError`. The production path is unaffected; the patch target
 needs renaming. This must be fixed before the Week-3 submission so CI is green.
 
-Manual acceptance for the Week-2 demo:
+Manual acceptance for the Week-2 demo (status from the runtime run on 2 Aug 2026, done without
+API keys — items 1–4 could not be exercised because every copilot-backed route returns 503):
 
-1. Create a ticket about minimum-balance charges → draft cites `banking-charges-and-minimum-balance.md`.
-2. Create a billing/SLA ticket → `context_used.tool_calls` contains `lookup_customer_plan`.
+1. Create a ticket about minimum-balance charges → draft cites `banking-charges-and-minimum-balance.md`. *(untested)*
+2. Create a billing/SLA ticket → `context_used.tool_calls` contains `lookup_customer_plan`. *(untested)*
 3. Accept a draft → ticket flips to `resolved`, and the resolution appears in
-   `GET /api/customers/{id}/memories`.
-4. File a second ticket for the same customer → the earlier resolution comes back as a memory hit.
+   `GET /api/customers/{id}/memories`. *(untested)*
+4. File a second ticket for the same customer → the earlier resolution comes back as a memory hit. *(untested)*
+5. Both services start, `/health` returns ok, `/docs` lists the ten routes above, dashboard loads. *(passed)*
+6. `POST /api/knowledge/ingest {"clear_existing": true}` → 4 files / 4 chunks. *(passed, with the
+   embedding caveat in §5)*
+7. Ticket creation through the dashboard persists and appears in the list. *(passed)*
+8. Invalid email → 422 rendered as a banner, no 500; `GET /api/tickets/99999` and
+   `/api/drafts/99999` → 404. *(passed)*
+9. Failures are surfaced, not silent: a failed draft shows a warning banner and the missing-key
+   error under *Context Errors* with signals 0/0/0. *(passed)*
 
 ---
 
@@ -187,8 +208,8 @@ Manual acceptance for the Week-2 demo:
 
 | Capstone requirement | Status this week |
 |---|---|
-| Develop AI logic & data flow | Done — retrieval + memory + tools + agent, wired end to end |
-| Working prototype | Done — API + dashboard running under Docker Compose, deployable to EC2 (`docs/EC2_deployment_flow.md`) |
+| Develop AI logic & data flow | Built — retrieval + memory + tools + agent wired end to end (runtime verification pending keys) |
+| Working prototype | Partly verified — API + dashboard run and the non-AI flow is confirmed end to end; the AI half is unverified pending API keys (§6) |
 | Use ≥2 tool categories | LLM & AI APIs (Groq, Google embeddings) + Database/Backend (SQLite, ChromaDB, Mem0) + Testing (pytest/CI) |
 | Core flow first, polish later | Core flow (ticket → AI → reviewed draft) is complete; UI polish deferred to Week 3 |
 | Build-in-Public Post #2 | Draft in §9 |
@@ -201,7 +222,10 @@ Manual acceptance for the Week-2 demo:
 
 - CI is red: 3 of 29 tests patch a function name that no longer exists (see §6).
 - Repository `README.md` is empty; `pyproject.toml` points `readme` at a missing `Plan.md`.
-- No retrieval-quality evaluation yet — top-k is untuned and unmeasured.
+- Missing `GROQ_API_KEY` bypasses the fallback chain entirely (see §4) — 503 instead of a draft.
+- No retrieval-quality evaluation yet — top-k is untuned and unmeasured, and the KB is too small
+  to exercise chunking at all.
+- KB ingest reports success even when it quietly used default (non-Gemini) embeddings.
 - No auth on the API, and no rate limiting on the LLM calls.
 - Groq/Gemini failures are caught and degraded silently into `context_used.errors`; the
   dashboard should surface them prominently.
@@ -213,9 +237,11 @@ Manual acceptance for the Week-2 demo:
 2. Rebuild the dashboard around the review loop: draft, evidence panel, accept/edit in one view.
 3. Surface `signals` as badges (KB sources, tool calls, memory hits, degradation warnings).
 4. Write the README + architecture diagram (`flow.excalidraw` is already in the repo).
-5. Add a small golden-set eval: ~15 tickets with expected KB sources, to tune `rag_top_k`/chunk size.
-6. Confirm the EC2 deployment from `main` and capture a live URL for the demo.
-7. Ticket filtering/search and a per-customer timeline in the UI.
+5. Move the `GROQ_API_KEY` check out of `SupportCopilot.__init__` so tier-3 is actually reachable,
+   and fail the KB ingest loudly when the configured embedding provider is unavailable.
+6. Add a small golden-set eval: ~15 tickets with expected KB sources, to tune `rag_top_k`/chunk size.
+7. Confirm the EC2 deployment from `main` and capture a live URL for the demo.
+8. Ticket filtering/search and a per-customer timeline in the UI.
 
 ---
 
