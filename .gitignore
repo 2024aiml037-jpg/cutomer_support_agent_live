@@ -72,3 +72,6 @@ logs/
 
 # uv
 .uv/
+
+# Playwright e2e artifacts
+tests/e2e/artifacts/
