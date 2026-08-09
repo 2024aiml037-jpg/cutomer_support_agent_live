@@ -1,14 +1,42 @@
+# Runtime data (mounted as volumes)
 data/
+
+# Virtual environment
 .venv/
+
+# Notebooks
 notebooks/
+
+# Version control
 .git/
+.gitignore
+
+# Python artefacts
 __pycache__/
 **/__pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.egg-info/
+
+# Secrets (never bake into the image)
 .env
-*.md
+.env.local
+.env.*.local
+
+# Docs / design files
 docs/
-tests/
 flow.excalidraw
 output.md
+Test.md
+*.md
+!README.md
+
+# Tests
+tests/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
