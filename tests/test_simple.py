@@ -261,7 +261,7 @@ def _build_mock_copilot(tmp_path: Path, draft_text: str = "Hello, here is your d
 
     with (
         patch("customer_support_agent.services.copilot_service.ChatGroq", return_value=mock_llm),
-        patch("customer_support_agent.services.copilot_service.create_react_agent", return_value=mock_agent),
+        patch("customer_support_agent.services.copilot_service.create_agent", return_value=mock_agent),
         patch("customer_support_agent.services.copilot_service.CustomerMemoryStore", return_value=mock_memory),
         patch("customer_support_agent.services.copilot_service.KnowledgeBaseService", return_value=mock_rag),
     ):
