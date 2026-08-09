@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from customer_support_agent.api.dependencies import (
     get_copilot,
@@ -32,6 +32,7 @@ def get_draft_route(
 def update_draft_route(
     draft_id: int,
     payload: DraftUpdateRequest,
+    background_tasks: BackgroundTasks,
     drafts_repo: DraftsRepository = Depends(get_drafts_repository),
     tickets_repo: TicketsRepository = Depends(get_tickets_repository),
     draft_service: DraftService = Depends(get_draft_service),
@@ -48,18 +49,37 @@ def update_draft_route(
         relation = drafts_repo.get_ticket_and_customer_by_draft(draft_id)
         if relation:
             tickets_repo.set_status(relation["ticket_id"], "resolved")
-            try:
-                context_used = draft_service.parse_context_used(updated.get("context_used"))
-                get_copilot().save_accepted_resolution(
-                    customer_email=relation["customer_email"],
-                    customer_company=relation.get("customer_company"),
-                    ticket_subject=relation["subject"],
-                    ticket_description=relation["description"],
-                    draft_content=updated["content"],
-                    context_used=context_used,
-                )
-            except Exception:
-                # Draft acceptance should still succeed even if memory save fails.
-                pass
+            context_used = draft_service.parse_context_used(updated.get("context_used"))
+            background_tasks.add_task(
+                _save_resolution_safely,
+                customer_email=relation["customer_email"],
+                customer_company=relation.get("customer_company"),
+                ticket_subject=relation["subject"],
+                ticket_description=relation["description"],
+                draft_content=updated["content"],
+                context_used=context_used,
+            )
 
     return draft_service.serialize_draft(updated)
+
+
+def _save_resolution_safely(
+    customer_email: str,
+    customer_company: str | None,
+    ticket_subject: str,
+    ticket_description: str,
+    draft_content: str,
+    context_used: dict | None,
+) -> None:
+    try:
+        get_copilot().save_accepted_resolution(
+            customer_email=customer_email,
+            customer_company=customer_company,
+            ticket_subject=ticket_subject,
+            ticket_description=ticket_description,
+            draft_content=draft_content,
+            context_used=context_used,
+        )
+    except Exception:
+        # Draft acceptance should still succeed even if memory save fails.
+        pass

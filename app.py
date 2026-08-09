@@ -74,7 +74,7 @@ def update_draft(draft_id: int, content: str, status: str) -> dict[str, Any]:
     response = requests.patch(
         f"{API_BASE_URL}/api/drafts/{draft_id}",
         json={"content": content, "status": status},
-        timeout=20,
+        timeout=60,
     )
     if response.status_code >= 400:
         raise RuntimeError(_extract_api_error(response))
